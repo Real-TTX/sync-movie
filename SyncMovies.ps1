@@ -1,18 +1,20 @@
+# Define script parameters with options for various operations
 param (
-    [Parameter(Mandatory = $true)][string]$SourcePath,
-    [Parameter(Mandatory = $true)][string]$DestinationPath,
-    [string]$Condition,
-    [string]$LogFile = "$PSScriptRoot\SyncMedia.log",
-    [switch]$List,
-    [switch]$ListSource,
-    [switch]$ListDestination,
-    [switch]$Copy,
-    [switch]$Difference,
-    [switch]$Delete,
-    [switch]$WhatIf,
-    [switch]$FullSize
+    [Parameter(Mandatory = $true)][string]$SourcePath,         # Required source directory
+    [Parameter(Mandatory = $true)][string]$DestinationPath,    # Required destination directory
+    [string]$Condition,                                        # Optional filter condition based on year
+    [string]$LogFile = "$PSScriptRoot\SyncMedia.log",          # Path to log file (default in script folder)
+    [switch]$List,                                             # Flag to list all matched source directories
+    [switch]$ListSource,                                       # Flag to list only source items
+    [switch]$ListDestination,                                  # Flag to list destination items
+    [switch]$Copy,                                             # Flag to enable copy operation
+    [switch]$Difference,                                       # Flag to only act on differences
+    [switch]$Delete,                                           # Flag to enable delete operation
+    [switch]$WhatIf,                                           # Simulation mode (no actual changes)
+    [switch]$FullSize                                          # Flag to only calculate total size
 )
 
+# Logs a message with timestamp to console and log file
 function Log($message) {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "$timestamp - $message"
@@ -20,6 +22,7 @@ function Log($message) {
     $line | Out-File -FilePath $LogFile -Encoding utf8 -Append
 }
 
+# Extracts a 4-digit year enclosed in parentheses from a name string
 function Get-YearFromName($name) {
     if ($name -match "\((\d{4})\)") {
         return [int]$matches[1]
@@ -27,6 +30,7 @@ function Get-YearFromName($name) {
     return $null
 }
 
+# Checks if a given name matches the user-defined condition (e.g., "Year <= 2000")
 function Match-Condition($name) {
     if (-not $Condition) { return $true }
 
@@ -50,6 +54,7 @@ function Match-Condition($name) {
     return $false
 }
 
+# Retrieves all subdirectories that match the filtering condition
 function Get-MediaItems($path) {
     Get-ChildItem -Path $path -Directory -Recurse | Where-Object {
         Match-Condition $_.Name
@@ -62,6 +67,7 @@ function Get-MediaItems($path) {
     }
 }
 
+# Calculates total size (in GB) of files inside provided directories
 function Get-FolderContentSizeGB($items) {
     $totalBytes = 0
     foreach ($item in $items) {
@@ -74,7 +80,10 @@ function Get-FolderContentSizeGB($items) {
     return [math]::Round($totalBytes / 1GB, 2)
 }
 
+# Main synchronization function
 function Sync-Media {
+
+    # If only the total size is requested, calculate and exit
     if ($FullSize) {
         $sourceItems = Get-MediaItems $SourcePath
         $totalGB = Get-FolderContentSizeGB $sourceItems
@@ -82,6 +91,7 @@ function Sync-Media {
         return
     }
 
+    # Logging basic information
     Log "----- Sync started -----"
     Log "Source: $SourcePath"
     Log "Destination: $DestinationPath"
@@ -89,14 +99,17 @@ function Sync-Media {
     if ($Difference) { Log "Mode: Difference only" }
     if ($WhatIf) { Log "Mode: WhatIf (simulation only)" }
 
+    # Get and filter source and destination directories
     $sourceItems = Get-MediaItems $SourcePath
     $destinationItems = Get-ChildItem -Path $DestinationPath -Directory -Recurse
 
+    # Build lookup table of destination paths (case-insensitive)
     $destinationLookup = @{}
     foreach ($dest in $destinationItems) {
         $destinationLookup[$dest.FullName.ToLower()] = $true
     }
 
+    # Determine which items to copy
     $itemsToCopy = @()
     foreach ($item in $sourceItems) {
         $targetPath = Join-Path $DestinationPath $item.RelativePath
@@ -110,6 +123,7 @@ function Sync-Media {
         }
     }
 
+    # Optionally list source and/or destination content
     if ($List -or $ListSource) {
         Log "--- SOURCE FILES ---"
         $sourceItems | ForEach-Object { Log $_.RelativePath }
@@ -120,6 +134,7 @@ function Sync-Media {
         $destinationItems | ForEach-Object { Log $_.Name }
     }
 
+    # Perform the copy operation
     if ($Copy) {
         Log "--- FILES TO COPY ---"
         $itemsToCopy | ForEach-Object { Log $_.RelativePath }
@@ -148,6 +163,7 @@ function Sync-Media {
         }
     }
 
+    # Optionally delete items from source if they already exist in destination
     if ($Delete -and $Difference) {
         $itemsToDelete = $sourceItems | Where-Object {
             $targetPath = Join-Path $DestinationPath $_.RelativePath
@@ -181,4 +197,5 @@ function Sync-Media {
     Log "----- Sync finished -----`n"
 }
 
+# Execute the main function
 Sync-Media
