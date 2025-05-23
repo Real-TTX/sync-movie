@@ -9,7 +9,8 @@ param (
     [switch]$Copy,
     [switch]$Difference,
     [switch]$Delete,
-    [switch]$WhatIf
+    [switch]$WhatIf,
+    [switch]$FullSize
 )
 
 function Log($message) {
@@ -74,6 +75,13 @@ function Get-FolderContentSizeGB($items) {
 }
 
 function Sync-Media {
+    if ($FullSize) {
+        $sourceItems = Get-MediaItems $SourcePath
+        $totalGB = Get-FolderContentSizeGB $sourceItems
+        Log "Total size of filtered source directory: $totalGB GB"
+        return
+    }
+
     Log "----- Sync started -----"
     Log "Source: $SourcePath"
     Log "Destination: $DestinationPath"
@@ -122,17 +130,19 @@ function Sync-Media {
 
         $confirmation = Read-Host "`nDo you want to copy these files? (y/n)"
         if ($confirmation -eq "y") {
+            $i = 0
             foreach ($item in $itemsToCopy) {
+                $i++
                 $targetPath = Join-Path $DestinationPath $item.RelativePath
                 $targetDir = Split-Path $targetPath -Parent
                 if (-not (Test-Path $targetDir) -and -not $WhatIf) {
                     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
                 }
                 if ($WhatIf) {
-                    Log "WhatIf: Would copy $($item.RelativePath)"
+                    Log "WhatIf: Would copy $($item.RelativePath) (Progress: $i/$folderCount)"
                 } else {
                     Copy-Item -Path $item.FullPath -Destination $targetPath -Recurse -Force
-                    Log "Copied: $($item.RelativePath)"
+                    Log "Copied: $($item.RelativePath) (Progress: $i/$folderCount)"
                 }
             }
         }
@@ -154,12 +164,14 @@ function Sync-Media {
 
             $confirmation = Read-Host "`nDo you want to delete these files from source? (y/n)"
             if ($confirmation -eq "y") {
+                $i = 0
                 foreach ($item in $itemsToDelete) {
+                    $i++
                     if ($WhatIf) {
-                        Log "WhatIf: Would delete $($item.RelativePath)"
+                        Log "WhatIf: Would delete $($item.RelativePath) (Progress: $i/$folderCount)"
                     } else {
                         Remove-Item -Path $item.FullPath -Recurse -Force
-                        Log "Deleted: $($item.RelativePath)"
+                        Log "Deleted: $($item.RelativePath) (Progress: $i/$folderCount)"
                     }
                 }
             }
