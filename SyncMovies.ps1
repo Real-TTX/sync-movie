@@ -1,20 +1,19 @@
-# Define script parameters with options for various operations
 param (
-    [Parameter(Mandatory = $true)][string]$SourcePath,         # Required source directory
-    [Parameter(Mandatory = $true)][string]$DestinationPath,    # Required destination directory
-    [string]$Condition,                                        # Optional filter condition based on year
-    [string]$LogFile = "$PSScriptRoot\SyncMedia.log",          # Path to log file (default in script folder)
-    [switch]$List,                                             # Flag to list all matched source directories
-    [switch]$ListSource,                                       # Flag to list only source items
-    [switch]$ListDestination,                                  # Flag to list destination items
-    [switch]$Copy,                                             # Flag to enable copy operation
-    [switch]$Difference,                                       # Flag to only act on differences
-    [switch]$Delete,                                           # Flag to enable delete operation
-    [switch]$WhatIf,                                           # Simulation mode (no actual changes)
-    [switch]$FullSize                                          # Flag to only calculate total size
+    [Parameter(Mandatory = $true)][string]$SourcePath,
+    [Parameter(Mandatory = $true)][string]$DestinationPath,
+    [string]$Condition,
+    [string]$LogFile = "$PSScriptRoot\SyncMedia.log",
+    [switch]$List,
+    [switch]$ListSource,
+    [switch]$ListDestination,
+    [switch]$Copy,
+    [switch]$Difference,
+    [switch]$Delete,
+    [switch]$WhatIf,
+    [switch]$FullSize,
+    [switch]$ProgressSize
 )
 
-# Logs a message with timestamp to console and log file
 function Log($message) {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "$timestamp - $message"
@@ -22,7 +21,6 @@ function Log($message) {
     $line | Out-File -FilePath $LogFile -Encoding utf8 -Append
 }
 
-# Extracts a 4-digit year enclosed in parentheses from a name string
 function Get-YearFromName($name) {
     if ($name -match "\((\d{4})\)") {
         return [int]$matches[1]
@@ -30,7 +28,6 @@ function Get-YearFromName($name) {
     return $null
 }
 
-# Checks if a given name matches the user-defined condition (e.g., "Year <= 2000")
 function Match-Condition($name) {
     if (-not $Condition) { return $true }
 
@@ -54,7 +51,6 @@ function Match-Condition($name) {
     return $false
 }
 
-# Retrieves all subdirectories that match the filtering condition
 function Get-MediaItems($path) {
     Get-ChildItem -Path $path -Directory -Recurse | Where-Object {
         Match-Condition $_.Name
@@ -67,7 +63,16 @@ function Get-MediaItems($path) {
     }
 }
 
-# Calculates total size (in GB) of files inside provided directories
+function Get-FolderSizeBytes($path) {
+    $size = 0
+    if (Test-Path $path) {
+        Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+            $size += $_.Length
+        }
+    }
+    return $size
+}
+
 function Get-FolderContentSizeGB($items) {
     $totalBytes = 0
     foreach ($item in $items) {
@@ -80,10 +85,7 @@ function Get-FolderContentSizeGB($items) {
     return [math]::Round($totalBytes / 1GB, 2)
 }
 
-# Main synchronization function
 function Sync-Media {
-
-    # If only the total size is requested, calculate and exit
     if ($FullSize) {
         $sourceItems = Get-MediaItems $SourcePath
         $totalGB = Get-FolderContentSizeGB $sourceItems
@@ -91,7 +93,6 @@ function Sync-Media {
         return
     }
 
-    # Logging basic information
     Log "----- Sync started -----"
     Log "Source: $SourcePath"
     Log "Destination: $DestinationPath"
@@ -99,17 +100,14 @@ function Sync-Media {
     if ($Difference) { Log "Mode: Difference only" }
     if ($WhatIf) { Log "Mode: WhatIf (simulation only)" }
 
-    # Get and filter source and destination directories
     $sourceItems = Get-MediaItems $SourcePath
     $destinationItems = Get-ChildItem -Path $DestinationPath -Directory -Recurse
 
-    # Build lookup table of destination paths (case-insensitive)
     $destinationLookup = @{}
     foreach ($dest in $destinationItems) {
         $destinationLookup[$dest.FullName.ToLower()] = $true
     }
 
-    # Determine which items to copy
     $itemsToCopy = @()
     foreach ($item in $sourceItems) {
         $targetPath = Join-Path $DestinationPath $item.RelativePath
@@ -123,7 +121,6 @@ function Sync-Media {
         }
     }
 
-    # Optionally list source and/or destination content
     if ($List -or $ListSource) {
         Log "--- SOURCE FILES ---"
         $sourceItems | ForEach-Object { Log $_.RelativePath }
@@ -134,7 +131,6 @@ function Sync-Media {
         $destinationItems | ForEach-Object { Log $_.Name }
     }
 
-    # Perform the copy operation
     if ($Copy) {
         Log "--- FILES TO COPY ---"
         $itemsToCopy | ForEach-Object { Log $_.RelativePath }
@@ -143,27 +139,45 @@ function Sync-Media {
         $folderCount = $itemsToCopy.Count
         Log "$folderCount folder(s) with a total of $totalGB GB will be copied."
 
+        # Progress size setup
+        $totalSizeBytes = 0
+        if ($ProgressSize) {
+            foreach ($item in $itemsToCopy) {
+                $totalSizeBytes += Get-FolderSizeBytes $item.FullPath
+            }
+        }
+
         $confirmation = Read-Host "`nDo you want to copy these files? (y/n)"
         if ($confirmation -eq "y") {
             $i = 0
+            $currentSizeBytes = 0
             foreach ($item in $itemsToCopy) {
                 $i++
+                $itemSize = if ($ProgressSize) { Get-FolderSizeBytes $item.FullPath } else { 0 }
+                $currentSizeBytes += $itemSize
+
                 $targetPath = Join-Path $DestinationPath $item.RelativePath
                 $targetDir = Split-Path $targetPath -Parent
                 if (-not (Test-Path $targetDir) -and -not $WhatIf) {
                     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
                 }
+
+                $progressInfo = if ($ProgressSize) {
+                    " (Progress: $i/$folderCount, Size: {0:N1} GB / {1:N1} GB)" -f ($currentSizeBytes / 1GB), ($totalSizeBytes / 1GB)
+                } else {
+                    " (Progress: $i/$folderCount)"
+                }
+
                 if ($WhatIf) {
-                    Log "WhatIf: Would copy $($item.RelativePath) (Progress: $i/$folderCount)"
+                    Log "WhatIf: Would copy $($item.RelativePath)$progressInfo"
                 } else {
                     Copy-Item -Path $item.FullPath -Destination $targetPath -Recurse -Force
-                    Log "Copied: $($item.RelativePath) (Progress: $i/$folderCount)"
+                    Log "Copied: $($item.RelativePath)$progressInfo"
                 }
             }
         }
     }
 
-    # Optionally delete items from source if they already exist in destination
     if ($Delete -and $Difference) {
         $itemsToDelete = $sourceItems | Where-Object {
             $targetPath = Join-Path $DestinationPath $_.RelativePath
@@ -178,16 +192,34 @@ function Sync-Media {
             $folderCount = $itemsToDelete.Count
             Log "$folderCount folder(s) with a total of $totalGB GB will be deleted."
 
+            # Progress size setup
+            $totalSizeBytes = 0
+            if ($ProgressSize) {
+                foreach ($item in $itemsToDelete) {
+                    $totalSizeBytes += Get-FolderSizeBytes $item.FullPath
+                }
+            }
+
             $confirmation = Read-Host "`nDo you want to delete these files from source? (y/n)"
             if ($confirmation -eq "y") {
                 $i = 0
+                $currentSizeBytes = 0
                 foreach ($item in $itemsToDelete) {
                     $i++
+                    $itemSize = if ($ProgressSize) { Get-FolderSizeBytes $item.FullPath } else { 0 }
+                    $currentSizeBytes += $itemSize
+
+                    $progressInfo = if ($ProgressSize) {
+                        " (Progress: $i/$folderCount, Size: {0:N1} GB / {1:N1} GB)" -f ($currentSizeBytes / 1GB), ($totalSizeBytes / 1GB)
+                    } else {
+                        " (Progress: $i/$folderCount)"
+                    }
+
                     if ($WhatIf) {
-                        Log "WhatIf: Would delete $($item.RelativePath) (Progress: $i/$folderCount)"
+                        Log "WhatIf: Would delete $($item.RelativePath)$progressInfo"
                     } else {
                         Remove-Item -Path $item.FullPath -Recurse -Force
-                        Log "Deleted: $($item.RelativePath) (Progress: $i/$folderCount)"
+                        Log "Deleted: $($item.RelativePath)$progressInfo"
                     }
                 }
             }
@@ -197,5 +229,4 @@ function Sync-Media {
     Log "----- Sync finished -----`n"
 }
 
-# Execute the main function
 Sync-Media
